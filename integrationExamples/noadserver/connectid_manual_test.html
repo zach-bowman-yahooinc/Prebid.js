@@ -1,0 +1,268 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<title>ConnectID Storage Type Manual Test</title>
+<style>
+  body { font-family: Arial, sans-serif; padding: 20px; max-width: 1400px; margin: 0 auto; }
+  h1 { color: #333; }
+  .test-section { margin: 20px 0; padding: 20px; border: 2px solid #ddd; background: #f9f9f9; border-radius: 5px; }
+  button { margin: 5px; padding: 12px 20px; cursor: pointer; font-size: 14px; border-radius: 4px; border: 1px solid #ccc; }
+  button.primary { background: #007bff; color: white; border: none; font-weight: bold; }
+  button.primary:hover { background: #0056b3; }
+  .pass { color: #28a745; font-weight: bold; }
+  .fail { color: #dc3545; font-weight: bold; }
+  .info { color: #17a2b8; }
+  pre { background: #fff; padding: 10px; border: 1px solid #ddd; border-radius: 3px; overflow-x: auto; font-size: 12px; }
+  #log { background: #fff; border: 2px solid #ddd; padding: 15px; height: 500px; overflow-y: auto; font-family: 'Courier New', monospace; font-size: 13px; }
+  .log-entry { margin: 3px 0; padding: 2px 0; }
+  table { width: 100%; border-collapse: collapse; margin: 15px 0; }
+  th, td { padding: 10px; text-align: left; border: 1px solid #ddd; }
+  th { background: #e9ecef; font-weight: bold; }
+</style>
+<script>
+    var pbjs = pbjs || {};
+    pbjs.que = pbjs.que || [];
+    var currentStorageType = null;
+
+    function log(type, message) {
+        const logDiv = document.getElementById('log');
+        const entry = document.createElement('div');
+        entry.className = 'log-entry ' + type;
+
+        const timestamp = new Date().toLocaleTimeString();
+        const prefix = `[${timestamp}] `;
+
+        if (type === 'pass') entry.style.color = '#28a745';
+        else if (type === 'fail') entry.style.color = '#dc3545';
+        else if (type === 'info') entry.style.color = '#17a2b8';
+        else if (type === 'warn') entry.style.color = '#ffc107';
+
+        entry.textContent = prefix + message;
+        logDiv.appendChild(entry);
+        logDiv.scrollTop = logDiv.scrollHeight;
+
+        console.log(prefix + message);
+    }
+
+    function clearLog() {
+        document.getElementById('log').innerHTML = '';
+    }
+
+    function runTest(storageType) {
+        currentStorageType = storageType;
+        clearLog();
+
+        log('info', '========================================');
+        log('info', `STARTING TEST: ${storageType}`);
+        log('info', '========================================');
+
+        // Clear storage
+        localStorage.removeItem('connectId');
+        document.cookie = 'connectId=; expires=Thu, 01 Jan 1970 00:00:00 UTC; path=/;';
+
+        log('info', '✓ Cleared all storage');
+        log('info', `Before: localStorage=${localStorage.getItem('connectId') ? 'Present' : 'Empty'}, Cookie=${document.cookie.includes('connectId=') ? 'Present' : 'Empty'}`);
+
+        // Configure Prebid with TEST MODE
+        pbjs.que.push(function() {
+            pbjs.setConfig({
+                userSync: {
+                    syncEnabled: true,
+                    userIds: [{
+                        name: 'connectId',
+                        params: {
+                            pixelId: '__TEST_MODE__',  // Magic value to bypass AJAX!
+                            he: 'test@example.com'
+                        },
+                        storage: {
+                            type: storageType,
+                            name: 'connectId',
+                            expires: 15
+                        }
+                    }]
+                }
+            });
+
+            log('info', `✓ Configured Prebid with storage type: "${storageType}"`);
+            log('info', '✓ Using __TEST_MODE__ to bypass server call');
+            log('info', 'Waiting for ConnectID module to initialize...');
+
+            // Trigger the ConnectID module
+            setTimeout(function() {
+                log('info', 'Requesting user IDs...');
+
+                pbjs.getUserIdsAsync().then(function(userIds) {
+                    log('info', 'getUserIdsAsync completed!');
+                    console.log('User IDs returned:', userIds);
+
+                    // Wait a bit for storage write
+                    setTimeout(checkResults, 500);
+                }).catch(function(err) {
+                    log('fail', 'Error getting user IDs: ' + err);
+                });
+            }, 1000);
+        });
+    }
+
+    function checkResults() {
+        log('info', '');
+        log('info', '--- Checking Storage ---');
+
+        const localValue = localStorage.getItem('connectId');
+        const cookies = document.cookie.split(';');
+        const cookieValue = cookies.find(c => c.trim().startsWith('connectId='));
+
+        const hasLocal = !!localValue;
+        const hasCookie = !!cookieValue;
+
+        log('info', `After: localStorage=${hasLocal ? 'Present' : 'Empty'}, Cookie=${hasCookie ? 'Present' : 'Empty'}`);
+
+        let passed = false;
+        let testName = '';
+
+        log('info', '');
+        log('info', '========================================');
+        log('info', 'TEST RESULTS');
+        log('info', '========================================');
+
+        if (currentStorageType === 'html5') {
+            testName = 'html5 ONLY';
+            passed = hasLocal && !hasCookie;
+
+            log('info', `Expected: localStorage YES, Cookie NO`);
+            log(hasLocal ? 'pass' : 'fail', `  localStorage: ${hasLocal ? 'PRESENT ✓' : 'MISSING ✗'}`);
+            log(!hasCookie ? 'pass' : 'fail', `  Cookie: ${hasCookie ? 'PRESENT ✗ (should NOT be here!)' : 'NOT PRESENT ✓'}`);
+
+        } else if (currentStorageType === 'cookie') {
+            testName = 'cookie ONLY';
+            passed = hasCookie && !hasLocal;
+
+            log('info', `Expected: Cookie YES, localStorage NO`);
+            log(hasCookie ? 'pass' : 'fail', `  Cookie: ${hasCookie ? 'PRESENT ✓' : 'MISSING ✗'}`);
+            log(!hasLocal ? 'pass' : 'fail', `  localStorage: ${hasLocal ? 'PRESENT ✗ (should NOT be here!)' : 'NOT PRESENT ✓'}`);
+
+        } else {
+            testName = 'BOTH (cookie&html5)';
+            passed = hasCookie && hasLocal;
+
+            log('info', `Expected: localStorage YES, Cookie YES`);
+            log(hasLocal ? 'pass' : 'fail', `  localStorage: ${hasLocal ? 'PRESENT ✓' : 'MISSING ✗'}`);
+            log(hasCookie ? 'pass' : 'fail', `  Cookie: ${hasCookie ? 'PRESENT ✓' : 'MISSING ✗'}`);
+        }
+
+        log('info', '');
+        if (passed) {
+            log('pass', '╔══════════════════════════════════════╗');
+            log('pass', '║  ✓✓✓ TEST PASSED! ✓✓✓                ║');
+            log('pass', '║  Your storage type fix is working!  ║');
+            log('pass', '╚══════════════════════════════════════╝');
+        } else {
+            log('fail', '╔══════════════════════════════════════╗');
+            log('fail', '║  ✗✗✗ TEST FAILED ✗✗✗                 ║');
+            log('fail', '║  Storage not matching expected      ║');
+            log('fail', '╚══════════════════════════════════════╝');
+        }
+
+        // Show detailed values
+        log('info', '');
+        log('info', '--- Storage Contents ---');
+        if (localValue) {
+            log('info', 'localStorage value:');
+            try {
+                const parsed = JSON.parse(localValue);
+                log('info', JSON.stringify(parsed, null, 2));
+            } catch(e) {
+                log('info', localValue);
+            }
+        } else {
+            log('info', 'localStorage: (empty)');
+        }
+
+        if (cookieValue) {
+            log('info', 'Cookie value:');
+            log('info', cookieValue.trim());
+        } else {
+            log('info', 'Cookie: (empty)');
+        }
+
+        log('info', '========================================');
+    }
+
+    function clearAll() {
+        localStorage.removeItem('connectId');
+        document.cookie = 'connectId=; expires=Thu, 01 Jan 1970 00:00:00 UTC; path=/;';
+        clearLog();
+        log('info', 'All storage and log cleared!');
+    }
+</script>
+
+<script type="text/javascript" src="../../build/dev/prebid.js" async></script>
+</head>
+
+<body>
+<h1>🎯 ConnectID Storage Type Manual Test</h1>
+
+<div class="test-section" style="background: #e7f3ff; border-color: #007bff;">
+    <h2 style="margin-top: 0;">✅ How This Test Works</h2>
+    <p><strong>This test uses a special TEST MODE built into the ConnectID module:</strong></p>
+    <ol style="line-height: 1.8;">
+        <li>When <code>pixelId: '__TEST_MODE__'</code>, the module bypasses the Yahoo UPS server</li>
+        <li>It generates a mock ConnectID response internally</li>
+        <li>It calls <code>storeObject(responseObj, storageConfig)</code> with YOUR storage config</li>
+        <li>We check which storage location(s) got the ID written to</li>
+    </ol>
+    <p style="background: #fff3cd; padding: 10px; border-left: 4px solid #ffc107;">
+        <strong>⚠️ Important:</strong> If running multiple tests, clear browser data and hard refresh (Cmd+Shift+R / Ctrl+Shift+R) between tests to ensure clean state.
+    </p>
+</div>
+
+<div class="test-section">
+    <h2 style="margin-top: 0;">🚀 Run Tests</h2>
+    <p>Click a button to run the full end-to-end test:</p>
+    <button class="primary" onclick="runTest('html5')">▶ Test: html5 Only</button>
+    <button class="primary" onclick="runTest('cookie')">▶ Test: cookie Only</button>
+    <button class="primary" onclick="runTest('cookie&html5')">▶ Test: Both (cookie&html5)</button>
+    <br>
+    <button onclick="clearAll()" style="margin-top: 10px;">🗑️ Clear All</button>
+</div>
+
+<div class="test-section">
+    <h2 style="margin-top: 0;">📋 Test Log</h2>
+    <div id="log">
+        <div class="info">Click a test button above to start...</div>
+    </div>
+</div>
+
+<div class="test-section" style="background: #f8f9fa;">
+    <h2 style="margin-top: 0;">📊 Expected Results</h2>
+    <table>
+        <tr>
+            <th>Test</th>
+            <th>Expected localStorage</th>
+            <th>Expected Cookie</th>
+            <th>What It Proves</th>
+        </tr>
+        <tr>
+            <td><strong>html5 Only</strong></td>
+            <td style="background: #d4edda;">✓ Present</td>
+            <td style="background: #f8d7da;">✗ Not Present</td>
+            <td>Your fix ensures <code>type: 'html5'</code> writes ONLY to localStorage</td>
+        </tr>
+        <tr>
+            <td><strong>cookie Only</strong></td>
+            <td style="background: #f8d7da;">✗ Not Present</td>
+            <td style="background: #d4edda;">✓ Present</td>
+            <td>Your fix ensures <code>type: 'cookie'</code> writes ONLY to cookie</td>
+        </tr>
+        <tr>
+            <td><strong>Both</strong></td>
+            <td style="background: #d4edda;">✓ Present</td>
+            <td style="background: #d4edda;">✓ Present</td>
+            <td>Your fix ensures <code>type: 'cookie&html5'</code> writes to BOTH</td>
+        </tr>
+    </table>
+</div>
+
+</body>
+</html>
